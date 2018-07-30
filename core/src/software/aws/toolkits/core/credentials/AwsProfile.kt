@@ -13,6 +13,7 @@ import software.amazon.awssdk.profiles.ProfileProperty.AWS_ACCESS_KEY_ID
 import software.amazon.awssdk.profiles.ProfileProperty.AWS_SECRET_ACCESS_KEY
 import software.amazon.awssdk.profiles.ProfileProperty.AWS_SESSION_TOKEN
 import software.amazon.awssdk.profiles.ProfileProperty.EXTERNAL_ID
+import software.amazon.awssdk.profiles.ProfileProperty.MFA_SERIAL
 import software.amazon.awssdk.profiles.ProfileProperty.ROLE_ARN
 import software.amazon.awssdk.profiles.ProfileProperty.ROLE_SESSION_NAME
 import software.amazon.awssdk.profiles.ProfileProperty.SOURCE_PROFILE
@@ -26,12 +27,14 @@ import software.aws.toolkits.core.region.AwsRegion
 import software.aws.toolkits.core.region.ToolkitRegionProvider
 import software.aws.toolkits.resources.message
 import java.nio.file.Path
+import java.util.function.Supplier
 
 class ProfileToolkitCredentialsProvider(
     private val profiles: MutableMap<String, Profile>,
     internal val profile: Profile,
     private val sdkHttpClient: SdkHttpClient,
-    private val regionProvider: ToolkitRegionProvider
+    private val regionProvider: ToolkitRegionProvider,
+    private val mfaProvider: (String, String) -> String
 ) : ToolkitCredentialsProvider() {
     private val internalCredentialsProvider = createInternalCredentialProvider()
     override val id = "$TYPE:${profile.name()}"
@@ -51,12 +54,7 @@ class ProfileToolkitCredentialsProvider(
                 val roleSessionName = profile.property(ROLE_SESSION_NAME)
                     .orElseGet { "aws-toolkit-jetbrains-${System.currentTimeMillis()}" }
                 val externalId = profile.property(EXTERNAL_ID).orElse(null)
-
-                val assumeRoleRequest = AssumeRoleRequest.builder()
-                    .roleArn(roleArn)
-                    .roleSessionName(roleSessionName)
-                    .externalId(externalId)
-                    .build()
+                val mfaSerial = profile.property(MFA_SERIAL).orElse(null)
 
                 val stsRegion = DefaultAwsRegionProviderChain().region?.let {
                     regionProvider.regions()[it.id()]
@@ -71,7 +69,8 @@ class ProfileToolkitCredentialsProvider(
                             profiles,
                             profiles[sourceProfile]!!,
                             sdkHttpClient,
-                            regionProvider
+                            regionProvider,
+                            mfaProvider
                         )
                     )
                     .region(Region.of(stsRegion.id))
@@ -79,7 +78,14 @@ class ProfileToolkitCredentialsProvider(
 
                 StsAssumeRoleCredentialsProvider.builder()
                     .stsClient(stsClient)
-                    .refreshRequest(assumeRoleRequest)
+                    .refreshRequest(Supplier {
+                        createAssumeRoleRequest(
+                            mfaSerial,
+                            roleArn,
+                            roleSessionName,
+                            externalId
+                        )
+                    })
                     .build()
             }
             propertyExists(AWS_SESSION_TOKEN) -> {
@@ -101,6 +107,27 @@ class ProfileToolkitCredentialsProvider(
             }
             else -> throw IllegalArgumentException("Profile `$profile` is unsupported")
         }
+    }
+
+    private fun createAssumeRoleRequest(
+        mfaSerial: String?,
+        roleArn: String,
+        roleSessionName: String?,
+        externalId: String?
+    ): AssumeRoleRequest {
+        return mfaSerial?.let {
+            AssumeRoleRequest.builder()
+                .roleArn(roleArn)
+                .roleSessionName(roleSessionName)
+                .externalId(externalId)
+                .serialNumber(mfaSerial)
+                .tokenCode(mfaProvider.invoke(profile.name(), mfaSerial))
+                .build()
+        } ?: AssumeRoleRequest.builder()
+            .roleArn(roleArn)
+            .roleSessionName(roleSessionName)
+            .externalId(externalId)
+            .build()
     }
 
     private fun validateChain() {
@@ -126,7 +153,15 @@ class ProfileToolkitCredentialsProvider(
 
     private fun requiredProperty(property: String): String {
         return profile.property(property)
-            .orElseThrow { IllegalArgumentException(message("credentials.profile.missing_property", profile.name(), property)) }
+            .orElseThrow {
+                IllegalArgumentException(
+                    message(
+                        "credentials.profile.missing_property",
+                        profile.name(),
+                        property
+                    )
+                )
+            }
     }
 
     override fun toString(): String {
@@ -137,6 +172,7 @@ class ProfileToolkitCredentialsProvider(
 class ProfileToolkitCredentialsProviderFactory(
     private val sdkHttpClient: SdkHttpClient,
     private val regionProvider: ToolkitRegionProvider,
+    private val mfaProvider: (String, String) -> String,
     private val credentialLocationOverride: Path? = null
 ) : ToolkitCredentialsProviderFactory(TYPE) {
     init {
@@ -159,7 +195,7 @@ class ProfileToolkitCredentialsProviderFactory(
 
             clear()
             profiles.values.forEach {
-                add(ProfileToolkitCredentialsProvider(profiles, it, sdkHttpClient, regionProvider))
+                add(ProfileToolkitCredentialsProvider(profiles, it, sdkHttpClient, regionProvider, mfaProvider))
             }
         } catch (e: Exception) {
             // TODO: Need a better way to report this, a notification SPI?

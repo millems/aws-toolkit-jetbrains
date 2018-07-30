@@ -2,6 +2,7 @@ buildscript {
     ext.kotlinVersion = "$kotlinVersion"
 
     repositories {
+        mavenLocal()
         mavenCentral()
         jcenter()
         maven {
@@ -22,6 +23,7 @@ version '0.1-SNAPSHOT'
 
 allprojects {
     repositories {
+        mavenLocal()
         mavenCentral()
         jcenter()
     }
