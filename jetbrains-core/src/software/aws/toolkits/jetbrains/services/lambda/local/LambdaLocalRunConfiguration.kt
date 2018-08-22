@@ -7,48 +7,48 @@ import com.intellij.codeInsight.lookup.CharFilter
 import com.intellij.codeInsight.lookup.LookupElementBuilder
 import com.intellij.execution.ExecutionException
 import com.intellij.execution.Executor
-import com.intellij.execution.configurations.ConfigurationFactory
-import com.intellij.execution.configurations.ConfigurationTypeBase
-import com.intellij.execution.configurations.LocatableConfigurationBase
-import com.intellij.execution.configurations.RunConfiguration
-import com.intellij.execution.configurations.RunProfileState
-import com.intellij.execution.configurations.RunProfileWithCompileBeforeLaunchOption
-import com.intellij.execution.configurations.RuntimeConfigurationError
+import com.intellij.execution.actions.ConfigurationContext
+import com.intellij.execution.actions.RunConfigurationProducer
+import com.intellij.execution.configurations.*
 import com.intellij.execution.runners.ExecutionEnvironment
 import com.intellij.openapi.extensions.ExtensionPointName
 import com.intellij.openapi.options.SettingsEditor
 import com.intellij.openapi.project.Project
 import com.intellij.openapi.roots.ProjectRootManager
+import com.intellij.openapi.util.Ref
 import com.intellij.psi.NavigatablePsiElement
+import com.intellij.psi.PsiElement
 import com.intellij.util.indexing.FileBasedIndex
 import com.intellij.util.textCompletion.TextCompletionProvider
 import com.intellij.util.xmlb.XmlSerializer
+import com.jetbrains.extensions.getSdk
 import icons.AwsIcons
 import org.jdom.Element
 import org.jetbrains.annotations.TestOnly
 import software.amazon.awssdk.services.lambda.model.Runtime
+import software.aws.toolkits.jetbrains.services.lambda.*
 import software.aws.toolkits.jetbrains.services.lambda.Lambda.findPsiElementsForHandler
-import software.aws.toolkits.jetbrains.services.lambda.LambdaHandlerIndex
-import software.aws.toolkits.jetbrains.services.lambda.RuntimeGroup
-import software.aws.toolkits.jetbrains.services.lambda.RuntimeGroupExtensionPointObject
-import software.aws.toolkits.jetbrains.services.lambda.runtimeGroup
 import software.aws.toolkits.jetbrains.utils.ui.populateValues
 import software.aws.toolkits.resources.message
 import javax.swing.JPanel
 
-class LambdaRunConfiguration :
-    ConfigurationTypeBase("aws.lambda", message("lambda.service_name"), message("lambda.run_configuration.description"), AwsIcons.Logos.LAMBDA) {
+class LambdaRunConfigurationType :
+        ConfigurationTypeBase("aws.lambda", message("lambda.service_name"), message("lambda.run_configuration.description"), AwsIcons.Logos.LAMBDA) {
     init {
         addFactory(LambdaLocalRunConfigurationFactory(this))
     }
+
+    companion object {
+        fun getInstance(): LambdaRunConfigurationType = ConfigurationTypeUtil.findConfigurationType(LambdaRunConfigurationType::class.java)
+    }
 }
 
-class LambdaLocalRunConfigurationFactory(configuration: LambdaRunConfiguration) : ConfigurationFactory(configuration) {
+class LambdaLocalRunConfigurationFactory(configuration: LambdaRunConfigurationType) : ConfigurationFactory(configuration) {
     override fun createTemplateConfiguration(project: Project): RunConfiguration = LambdaLocalRunConfiguration(project, this)
 }
 
 class LambdaLocalRunConfiguration(project: Project, factory: ConfigurationFactory) : LocatableConfigurationBase(project, factory, "AWS Lambda"),
-    RunProfileWithCompileBeforeLaunchOption {
+        RunProfileWithCompileBeforeLaunchOption {
 
     internal var settings = PersistableLambdaRunSettings()
 
@@ -82,9 +82,9 @@ class LambdaLocalRunConfiguration(project: Project, factory: ConfigurationFactor
     override fun suggestedName(): String? = settings.handler
 
     @TestOnly
-    fun configure(runtime: Runtime, handler: String, input: String? = null, envVars: MutableMap<String, String> = mutableMapOf()) {
+    fun configure(runtime: Runtime?, handler: String, input: String? = null, envVars: MutableMap<String, String> = mutableMapOf()) {
         settings.input = input
-        settings.runtime = runtime.name
+        settings.runtime = runtime?.name
         settings.handler = handler
         settings.environmentVariables = envVars
     }
@@ -167,4 +167,33 @@ interface LambdaLocalRunProvider {
     fun createRunProfileState(environment: ExecutionEnvironment, project: Project, settings: LambdaRunSettings): RunProfileState
 
     companion object : RuntimeGroupExtensionPointObject<LambdaLocalRunProvider>(ExtensionPointName.create("aws.toolkit.lambda.localRunProvider"))
+}
+
+class LambdaLocalRunConfigurationProducer : RunConfigurationProducer<LambdaLocalRunConfiguration>(LambdaRunConfigurationType.getInstance()) {
+
+    override fun setupConfigurationFromContext(configuration: LambdaLocalRunConfiguration, context: ConfigurationContext, sourceElement: Ref<PsiElement>): Boolean {
+        val element = context.psiLocation ?: return false
+        val runtimeGroup = element.language.runtimeGroup ?: return false
+        if (runtimeGroup !in LambdaHandlerResolver.supportedRuntimeGroups) {
+            return false
+        }
+        val resolver = LambdaHandlerResolver.getInstance(runtimeGroup)
+        val handler = resolver.determineHandler(element) ?: return false
+//        val runtime = null
+        configuration.configure(null, handler)
+        return true
+    }
+
+    override fun isConfigurationFromContext(configuration: LambdaLocalRunConfiguration, context: ConfigurationContext): Boolean {
+        val element = context.psiLocation ?: return false
+        val runtimeGroup = element.language.runtimeGroup ?: return false
+        if (runtimeGroup !in LambdaHandlerResolver.supportedRuntimeGroups) {
+            return false
+        }
+        val resolver = LambdaHandlerResolver.getInstance(runtimeGroup)
+        val handler = resolver.determineHandler(element) ?: return false
+        val runtime = context.module.getSdk()?.let { RuntimeGroup.runtimeForSdk(it) }
+        return configuration.settings.handler == handler && configuration.settings.runtime == runtime?.name
+    }
+
 }

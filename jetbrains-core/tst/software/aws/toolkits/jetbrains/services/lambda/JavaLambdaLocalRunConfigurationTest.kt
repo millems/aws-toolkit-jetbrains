@@ -29,7 +29,7 @@ import org.junit.Rule
 import org.junit.Test
 import software.amazon.awssdk.services.lambda.model.Runtime
 import software.aws.toolkits.jetbrains.services.lambda.local.LambdaLocalRunConfiguration
-import software.aws.toolkits.jetbrains.services.lambda.local.LambdaRunConfiguration
+import software.aws.toolkits.jetbrains.services.lambda.local.LambdaRunConfigurationType
 import software.aws.toolkits.jetbrains.testutils.rules.HeavyJavaCodeInsightTestFixtureRule
 import software.aws.toolkits.jetbrains.testutils.rules.addClass
 import software.aws.toolkits.jetbrains.testutils.rules.addModule
@@ -70,7 +70,7 @@ class JavaLambdaLocalRunConfigurationTest {
         )
 
         val runManager = RunManager.getInstance(projectRule.project)
-        val factory = runManager.configurationFactories.filterIsInstance<LambdaRunConfiguration>().first()
+        val factory = runManager.configurationFactories.filterIsInstance<LambdaRunConfigurationType>().first()
         val runConfigurationAndSettings = runManager.createRunConfiguration("Test", factory.configurationFactories.first())
         val runConfiguration = runConfigurationAndSettings.configuration as LambdaLocalRunConfiguration
 
