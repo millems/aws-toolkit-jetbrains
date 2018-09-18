@@ -1,5 +1,8 @@
 language: java
 install: true
+os:
+  - linux
+  - osx
 
 jdk:
 - oraclejdk8
@@ -9,3 +12,7 @@ script:
 
 after_success:
 - bash <(curl -s https://codecov.io/bash)
+
+branches:
+  only:
+  - master
